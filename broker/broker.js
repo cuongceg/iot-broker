@@ -23,6 +23,7 @@ const loggerDb = new MQTTPublishLogger({
   password: process.env.DB_PASSWORD || 'postgres',
   port: process.env.DB_PORT || 5432
 });
+const clientInfo = new Map();
 let USERS = [];
 try {
   if (process.env.MQTT_USERS) {
@@ -53,10 +54,17 @@ aedes.on('client', (client) => {
     ip: client.conn?.remoteAddress,
     port: client.conn?.remotePort
   });
+  clientInfo.set(client.id, {
+    ip: client.conn?.remoteAddress,
+    port: client.conn?.remotePort,
+    connectedAt: new Date(),
+    lastSeen: new Date()
+  });
 });
 
 aedes.on('clientDisconnect', (client) => {
   logger.logClientDisconnect(client.id);
+  clientInfo.delete(client.id);
 });
 
 aedes.on('subscribe', (subs, client) => {
@@ -72,6 +80,9 @@ aedes.on('publish', async (packet, client) => {
   if (packet && packet.topic && !packet.topic.startsWith('$SYS')) {
     const clientId = client?.id || 'broker';
     const info = clientInfo.get(clientId) || {};
+    if (clientInfo.has(clientId)) {
+      clientInfo.get(clientId).lastSeen = new Date();
+    }
     await loggerDb.logPublish(
       clientId,
       packet.topic,
