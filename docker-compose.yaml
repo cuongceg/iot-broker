@@ -3,13 +3,80 @@ version: "3.8"
 services:
   postgres:
     image: postgres:16
-    container_name: my-postgres
+    container_name: mqtt-postgres
     restart: unless-stopped
     environment:
-      POSTGRES_USER: admin
-      POSTGRES_PASSWORD: admin123
-      POSTGRES_DB: mqttbroker
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: mqtt_broker_logs
     ports:
       - "5433:5432"
     volumes:
       - ./data:/var/lib/postgresql/data
+    networks:
+      - mqtt_network
+
+  broker:
+    build:
+      context: ./broker
+      dockerfile: Dockerfile
+    container_name: mqtt-broker
+    restart: unless-stopped
+    environment:
+      - DB_USER=postgres
+      - DB_HOST=postgres
+      - DB_NAME=mqtt_broker_logs
+      - DB_PASSWORD=postgres
+      - DB_PORT=5432
+      - MQTT_TCP_PORT=1883
+      - MQTT_WS_PORT=8888
+    ports:
+      - "1883:1883"
+      - "8888:8888"
+    depends_on:
+      - postgres
+    volumes:
+      - broker_logs:/app/logs
+    networks:
+      - mqtt_network
+
+  api:
+    build:
+      context: ./api
+      dockerfile: Dockerfile
+    container_name: mqtt-api
+    restart: unless-stopped
+    environment:
+      - DB_USER=postgres
+      - DB_HOST=postgres
+      - DB_NAME=mqtt_broker_logs
+      - DB_PASSWORD=postgres
+      - DB_PORT=5432
+      - API_PORT=3001
+    ports:
+      - "3001:3001"
+    depends_on:
+      - postgres
+      - broker
+    networks:
+      - mqtt_network
+
+  dashboard:
+    build:
+      context: ./mqtt-dashboard
+      dockerfile: Dockerfile
+    container_name: mqtt-dashboard
+    restart: unless-stopped
+    ports:
+      - "3000:80"
+    depends_on:
+      - api
+    networks:
+      - mqtt_network
+
+volumes:
+  broker_logs:
+
+networks:
+  mqtt_network:
+    driver: bridge
