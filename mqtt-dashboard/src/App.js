@@ -1,6 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import axios from 'axios';
 import moment from 'moment';
+import * as XLSX from 'xlsx';
+import jsPDF from 'jspdf';
+import 'jspdf-autotable';
 import { 
   Wifi, 
   WifiOff, 
@@ -9,7 +12,11 @@ import {
   Activity, 
   Database,
   Send,
-  RefreshCw
+  RefreshCw,
+  Download,
+  FileText,
+  Search,
+  X
 } from 'lucide-react';
 import './App.css';
 
@@ -22,6 +29,14 @@ function App() {
   const [selectedDevice, setSelectedDevice] = useState(null);
   const [loading, setLoading] = useState(false);
   const [activeTab, setActiveTab] = useState('devices');
+  
+  // Search filters
+  const [filters, setFilters] = useState({
+    deviceId: '',
+    startDate: '',
+    endDate: ''
+  });
+  const [showFilters, setShowFilters] = useState(false);
 
   useEffect(() => {
     loadDevices();
@@ -59,7 +74,19 @@ function App() {
 
   const loadRecentActivity = async () => {
     try {
-      const response = await axios.get(`${API_BASE}/activity?limit=100`);
+      let url = `${API_BASE}/activity?limit=100`;
+      
+      if (filters.deviceId) {
+        url += `&deviceId=${encodeURIComponent(filters.deviceId)}`;
+      }
+      if (filters.startDate) {
+        url += `&startDate=${encodeURIComponent(filters.startDate)}`;
+      }
+      if (filters.endDate) {
+        url += `&endDate=${encodeURIComponent(filters.endDate)}`;
+      }
+      
+      const response = await axios.get(url);
       setLogs(response.data);
     } catch (err) {
       console.error('Error loading activity:', err);
@@ -69,7 +96,16 @@ function App() {
   const loadDeviceLogs = async (deviceId) => {
     try {
       setLoading(true);
-      const response = await axios.get(`${API_BASE}/devices/${deviceId}/logs?limit=100`);
+      let url = `${API_BASE}/devices/${deviceId}/logs?limit=100`;
+      
+      if (filters.startDate) {
+        url += `&startDate=${encodeURIComponent(filters.startDate)}`;
+      }
+      if (filters.endDate) {
+        url += `&endDate=${encodeURIComponent(filters.endDate)}`;
+      }
+      
+      const response = await axios.get(url);
       setLogs(response.data);
       setSelectedDevice(deviceId);
       setActiveTab('logs');
@@ -98,6 +134,119 @@ function App() {
     } finally {
       setLoading(false);
     }
+  };
+
+  const exportToExcel = () => {
+    try {
+      const exportData = logs.map(log => ({
+        'Timestamp': formatTime(log.ts),
+        'Device ID': log.device_id || 'N/A',
+        'Client ID': log.client_id || 'N/A',
+        'Direction': log.direction,
+        'Topic': log.topic,
+        'Message Type': log.msg_type,
+        'Status': log.status,
+        'Payload': typeof log.payload === 'object' ? JSON.stringify(log.payload) : log.payload
+      }));
+
+      const ws = XLSX.utils.json_to_sheet(exportData);
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, 'Logs');
+      
+      // Auto-size columns
+      const maxWidth = 50;
+      const colWidths = Object.keys(exportData[0] || {}).map(key => ({
+        wch: Math.min(maxWidth, Math.max(key.length, 10))
+      }));
+      ws['!cols'] = colWidths;
+      
+      const fileName = `mqtt_logs_${moment().format('YYYY-MM-DD_HH-mm-ss')}.xlsx`;
+      XLSX.writeFile(wb, fileName);
+    } catch (err) {
+      console.error('Error exporting to Excel:', err);
+      alert('Failed to export to Excel');
+    }
+  };
+
+  const exportToPDF = () => {
+    try {
+      const doc = new jsPDF('l', 'mm', 'a4');
+      
+      doc.setFontSize(16);
+      doc.text('MQTT Broker Logs', 14, 15);
+      
+      doc.setFontSize(10);
+      doc.text(`Generated: ${moment().format('DD/MM/YYYY HH:mm:ss')}`, 14, 22);
+      
+      if (selectedDevice) {
+        doc.text(`Device: ${selectedDevice}`, 14, 28);
+      }
+      
+      if (filters.startDate || filters.endDate) {
+        let filterText = 'Filters: ';
+        if (filters.startDate) filterText += `From ${moment(filters.startDate).format('DD/MM/YYYY HH:mm')} `;
+        if (filters.endDate) filterText += `To ${moment(filters.endDate).format('DD/MM/YYYY HH:mm')}`;
+        doc.text(filterText, 14, 34);
+      }
+      
+      const tableData = logs.map(log => [
+        formatTime(log.ts),
+        log.device_id || 'N/A',
+        log.direction,
+        log.topic.substring(0, 30) + (log.topic.length > 30 ? '...' : ''),
+        log.msg_type,
+        log.status,
+        typeof log.payload === 'object' 
+          ? JSON.stringify(log.payload).substring(0, 30) + '...'
+          : (log.payload || '').substring(0, 30)
+      ]);
+      
+      doc.autoTable({
+        startY: filters.startDate || filters.endDate ? 38 : (selectedDevice ? 32 : 26),
+        head: [['Time', 'Device', 'Direction', 'Topic', 'Type', 'Status', 'Payload']],
+        body: tableData,
+        styles: { fontSize: 8, cellPadding: 2 },
+        headStyles: { fillColor: [66, 139, 202], textColor: 255 },
+        alternateRowStyles: { fillColor: [245, 245, 245] },
+        margin: { top: 10 }
+      });
+      
+      const fileName = `mqtt_logs_${moment().format('YYYY-MM-DD_HH-mm-ss')}.pdf`;
+      doc.save(fileName);
+    } catch (err) {
+      console.error('Error exporting to PDF:', err);
+      alert('Failed to export to PDF');
+    }
+  };
+
+  const handleFilterChange = (key, value) => {
+    setFilters(prev => ({
+      ...prev,
+      [key]: value
+    }));
+  };
+
+  const applyFilters = () => {
+    if (activeTab === 'activity') {
+      loadRecentActivity();
+    } else if (activeTab === 'logs' && selectedDevice) {
+      loadDeviceLogs(selectedDevice);
+    }
+  };
+
+  const clearFilters = () => {
+    setFilters({
+      deviceId: '',
+      startDate: '',
+      endDate: ''
+    });
+    setTimeout(() => {
+      if (activeTab === 'activity') {
+        loadRecentActivity();
+      } else if (activeTab === 'logs' && selectedDevice) {
+        loadDeviceLogs(selectedDevice);
+      }
+    }, 100);
   };
 
   const formatTime = (timestamp) => {
@@ -146,7 +295,7 @@ function App() {
                 disabled={loading}
               >
                 <Unlock size={16} />
-                Unlock
+                Turn off
               </button>
               <button 
                 onClick={() => sendCommand(device.device_id, 'lock')}
@@ -154,7 +303,7 @@ function App() {
                 disabled={loading}
               >
                 <Lock size={16} />
-                Lock
+                Turn on
               </button>
             </>
           )}
@@ -289,14 +438,100 @@ function App() {
 
         {(activeTab === 'activity' || activeTab === 'logs') && (
           <div className="logs-container">
-            <h2>
-              {activeTab === 'logs' ? `${selectedDevice} Logs` : 'Recent Activity'}
-            </h2>
+            <div className="logs-header">
+              <h2>
+                {activeTab === 'logs' ? `${selectedDevice} Logs` : 'Recent Activity'}
+              </h2>
+              
+              <div className="logs-actions">
+                <button 
+                  className="btn btn-filter"
+                  onClick={() => setShowFilters(!showFilters)}
+                >
+                  <Search size={16} />
+                  {showFilters ? 'Hide Filters' : 'Show Filters'}
+                </button>
+                
+                <button 
+                  className="btn btn-export"
+                  onClick={exportToExcel}
+                  disabled={logs.length === 0}
+                >
+                  <Download size={16} />
+                  Export Excel
+                </button>
+                
+                <button 
+                  className="btn btn-export"
+                  onClick={exportToPDF}
+                  disabled={logs.length === 0}
+                >
+                  <FileText size={16} />
+                  Export PDF
+                </button>
+              </div>
+            </div>
+            
+            {showFilters && (
+              <div className="filters-panel">
+                {activeTab === 'activity' && (
+                  <div className="filter-group">
+                    <label>Device ID:</label>
+                    <input
+                      type="text"
+                      placeholder="Enter device ID"
+                      value={filters.deviceId}
+                      onChange={(e) => handleFilterChange('deviceId', e.target.value)}
+                    />
+                  </div>
+                )}
+                
+                <div className="filter-group">
+                  <label>Start Date & Time:</label>
+                  <input
+                    type="datetime-local"
+                    value={filters.startDate}
+                    onChange={(e) => handleFilterChange('startDate', e.target.value)}
+                  />
+                </div>
+                
+                <div className="filter-group">
+                  <label>End Date & Time:</label>
+                  <input
+                    type="datetime-local"
+                    value={filters.endDate}
+                    onChange={(e) => handleFilterChange('endDate', e.target.value)}
+                  />
+                </div>
+                
+                <div className="filter-actions">
+                  <button 
+                    className="btn btn-primary"
+                    onClick={applyFilters}
+                  >
+                    <Search size={16} />
+                    Apply Filters
+                  </button>
+                  
+                  <button 
+                    className="btn btn-secondary"
+                    onClick={clearFilters}
+                  >
+                    <X size={16} />
+                    Clear
+                  </button>
+                </div>
+              </div>
+            )}
             
             <div className="logs-list">
-              {logs.map(log => (
-                <LogEntry key={log.id} log={log} />
-              ))}
+              {logs.length === 0 ? (
+                <div className="no-data">No logs found</div>
+              ) : (
+                logs.map(log => (
+                  <LogEntry key={log.id} log={log} />
+                ))
+              )}
             </div>
           </div>
         )}
