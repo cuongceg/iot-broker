@@ -46,7 +46,7 @@ app.get('/api/devices', async (req, res) => {
 // Get logs by device
 app.get('/api/devices/:deviceId/logs', async (req, res) => {
   const { deviceId } = req.params;
-  const { limit = 50, type } = req.query;
+  const { limit = 50, type, startDate, endDate } = req.query;
   
   try {
     let query = `
@@ -56,8 +56,18 @@ app.get('/api/devices/:deviceId/logs', async (req, res) => {
     const params = [deviceId];
     
     if (type) {
-      query += ` AND msg_type = $2`;
+      query += ` AND msg_type = $${params.length + 1}`;
       params.push(type);
+    }
+    
+    if (startDate) {
+      query += ` AND ts >= $${params.length + 1}`;
+      params.push(startDate);
+    }
+    
+    if (endDate) {
+      query += ` AND ts <= $${params.length + 1}`;
+      params.push(endDate);
     }
     
     query += ` ORDER BY ts DESC LIMIT $${params.length + 1}`;
@@ -73,14 +83,34 @@ app.get('/api/devices/:deviceId/logs', async (req, res) => {
 
 // Get recent activity
 app.get('/api/activity', async (req, res) => {
-  const { limit = 100 } = req.query;
+  const { limit = 100, deviceId, startDate, endDate } = req.query;
   
   try {
-    const result = await pool.query(`
+    let query = `
       SELECT * FROM broker_logs 
-      ORDER BY ts DESC 
-      LIMIT $1
-    `, [parseInt(limit)]);
+      WHERE 1=1
+    `;
+    const params = [];
+    
+    if (deviceId) {
+      query += ` AND device_id = $${params.length + 1}`;
+      params.push(deviceId);
+    }
+    
+    if (startDate) {
+      query += ` AND ts >= $${params.length + 1}`;
+      params.push(startDate);
+    }
+    
+    if (endDate) {
+      query += ` AND ts <= $${params.length + 1}`;
+      params.push(endDate);
+    }
+    
+    query += ` ORDER BY ts DESC LIMIT $${params.length + 1}`;
+    params.push(parseInt(limit));
+    
+    const result = await pool.query(query, params);
     res.json(result.rows);
   } catch (err) {
     console.error(err);
